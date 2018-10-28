@@ -44,7 +44,7 @@ except tweepy.TweepError as e:
 query = 'doing today OR do today -filter:retweets AND -filter:replies'
 max_tweets = 200
 
-user_name = '@TreasuryMog' 
+user_name = '@realDonaldTrump' 
 ####
 # Do the search
 #####
@@ -93,7 +93,7 @@ else :
     with open(filename, 'w') as outfile:
         json.dump(model_json, outfile)
 
-seeds = ['I', 'I am', 'memes']
+seeds = ['I', 'I am', 'Squirrel Hill']
 found_response_tweet = False
 possible_sentences = []
 iterations = 0
