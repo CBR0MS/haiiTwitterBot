@@ -19,6 +19,7 @@ class cmuClassScheduleParser(HTMLParser):
     ind = 0
     this_class = {}
     classes = {}
+    classes['topics'] = []
     this_section = ''
     get_section = False
 
@@ -94,6 +95,7 @@ class cmuClassScheduleParser(HTMLParser):
             self.ind += 1
 
         elif self.get_section:
+            self.classes['topics'].append(data)
             self.this_section = data
 
 # create a parser object 
