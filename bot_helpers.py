@@ -38,14 +38,13 @@ ongoing_conversations = []
 #########################################################################
 def check_for_tweets(query, searched_tweets, max_tweets, last_id):
     new_tweets = []
-    reply_tweets = []
 
     try:
         new_tweets = api.search(q=query, count=max_tweets, since_id=str(last_id), tweet_mode="extended")
         if new_tweets:
             print("\nFound {} new Tweet(s)\n".format(len(new_tweets)))
             searched_tweets.extend(new_tweets)
-            last_id = new_tweets[-1].id
+            last_id = new_tweets[0].id
 
     except tweepy.TweepError as e:
         print("Error querying Tweets, aborting") 
@@ -71,13 +70,36 @@ def hyphenate_class(key):
 # requirements 
 #########################################################################
 def get_class(user_history):
-    starting_phrases = ["You'll definitely like ", "Given what you've said, you might like ", "You could try ", "Well, people like you seem to like "]
-    user_history['waiting'] = 'NONE'
+    starting_phrases = ["You'll definitely like ", "Given what you've said, you might like ", "You could try ", "People like you seem to like "]
+    
+    if 'badresponse' not in user_history:
+        response = 'However, looks like your favorite number, interests, and favorite place don\'t align well with any CMU class. '
+    else: 
+        possible_reponses = ["Still No luck though. ", "Still nothing though 😥 ", "Still no results though... "]
+        response = random.choice(possible_reponses)
+    new_suggestions = ["Maybe try a new place?", "How about a different number?", "Maybe give a more specific interest?"]
+    options = ['num', 'place', 'thing']
+    opt = random.choice(options)
+    if opt == 'num':
+        response = response + new_suggestions[1]
+        user_history['waiting'] = 'num'
+    elif opt == 'place':
+        response = response + new_suggestions[0]
+        user_history['waiting'] = 'place'
+    elif opt == 'thing':
+        response = response + new_suggestions[2]
+        user_history['waiting'] = 'thing'
+
     for key in user_history['potentialClasses']:
         # if key not in user_history['badclasses']:
-        hyphenated = hyphenate_class(key)
-        response = random.choice(starting_phrases) + hyphenated + " " + data[key]['name'] + ". Check it out: https://www.cmucoursefind.xyz/courses/" + hyphenated
-        break
+        if data[key]['dept'] == user_history['topic'] and user_history['place'] in data[key]['place']:
+            hyphenated = hyphenate_class(key)
+            response = random.choice(starting_phrases) + hyphenated + " " + data[key]['name'] + ". Check it out: https://www.cmucoursefind.xyz/courses/" + hyphenated
+            user_history['waiting'] = 'NONE'
+            break
+
+    if user_history['waiting'] != 'NONE':
+        user_history['badresponse'] = True
 
     return response, user_history 
 
@@ -115,7 +137,7 @@ def get_next_question(user_history):
                 user_history['asked'].append(ques)
                 break
 
-    if user_history['interactions'] == 0:
+    if user_history['interactions'] < 1:
         "Let's start! " + response
     user_history['interactions'] = user_history['interactions'] + 1
 
@@ -127,15 +149,20 @@ def get_next_question(user_history):
 def get_class_by_num(num, user_history):
     response = ''
     found = False
+    user_history['potentialClasses'] = []
+
     for key in data:
         if num in key:
-            # and key not in user_history['badclasses']
             user_history['potentialClasses'].append(key)
             found = True
 
     if not found:
+        # use 12 instead
+        for key in data:
+            if '12' in key:
+                user_history['potentialClasses'].append(key)
         res, user_history = get_next_question(user_history)
-        response = "Well your number kinda sucks, let's move on. " + res
+        response = "Well your number kinda sucks, so I picked 12. Let's move on. " + res
     else:
         res, user_history = get_next_question(user_history)
         response = "You're in luck, there's some course numbers with " + str(num) + "! " + res
@@ -158,48 +185,66 @@ def get_class_by_place(place, user_history):
             most_sim = sim
             closest = token.text
 
+    user_history['place'] = closest
     if most_sim > 0.8:
         res, user_history = get_next_question(user_history)
         response = "Okay, there are some options in " + place + ". " + res
     else :
         res, user_history = get_next_question(user_history)
         response = place + " is pretty close to " + closest + " so let's go with that. " + res
+
     return response, user_history
 
 #########################################################################
 # Create a response given a thing (actvity, pastime)
 #########################################################################
-def get_class_by_thing(thing, user_history):
+def get_class_by_thing(thing, noun, user_history):
     token_thing = nlp(thing)
     topics = ''
-
-    for topic in data['topics']:
-        topics = topics + topic + ' ' 
-
-    possible_topics = nlp(topics)
-    merge_ents(possible_topics)
-    merge_ents(token_thing)
-    closest = ''
-    most_sim = 0
-
-    for token in possible_topics:
-        sim = token.similarity(token_thing)
-        if sim > most_sim:
-            most_sim = sim
-            closest = token.text
-
     full_thing = ''
+    noun = noun.lower()
+    print(noun)
+    found = False 
+    # first try finding the exact thing in the departments 
     for topic in data['topics']:
-        if closest in topic:
+        if noun in (topic.lower()):
             full_thing = topic
+            found= True
             break
 
-    if most_sim > 0.8:
+    # otherise, semantic similarity with word2vec
+    if not found:
+        for topic in data['topics']:
+            topics = topics + topic + ' ' 
+
+        possible_topics = nlp(topics)
+        merge_ents(possible_topics)
+        merge_ents(token_thing)
+        closest = ''
+        most_sim = 0
+
+        for token in possible_topics:
+            sim = token.similarity(token_thing)
+            if sim > most_sim:
+                most_sim = sim
+                closest = token.text
+
+        for topic in data['topics']:
+            if closest in topic:
+                full_thing = topic
+                break
+
+        user_history['topic'] = full_thing
+        if most_sim > 0.8:
+            res, user_history = get_next_question(user_history)
+            response = "Okay, there are some interesting options in " + full_thing + ". " + res
+        else :
+            res, user_history = get_next_question(user_history)
+            response = "That sounds a bit like " + full_thing + ". " + res
+    else:
+        user_history['topic'] = full_thing
         res, user_history = get_next_question(user_history)
-        response = "Okay, there are some interesting options in " + full_thing + ". " + res
-    else :
-        res, user_history = get_next_question(user_history)
-        response = thing + " sounds a bit like " + full_thing + ". " + res
+        response = "Okay, " + full_thing + " it is. " + res
     return response, user_history
 
 #########################################################################
@@ -227,6 +272,7 @@ def generate_reponse(tweet_text, user):
     places = []
     times = []
     things = []
+    nouns = []
     numbers = []
 
     for ent in doc.ents:
@@ -239,19 +285,17 @@ def generate_reponse(tweet_text, user):
 
     for chunk in doc.noun_chunks:
         things.append(chunk.text)
+        nouns.append(chunk.root.text)
 
     if 'waiting' in user_history:
         # we were waiting for a response from the user
         waiting_for = user_history['waiting']
-        # interactions = user_history['interactions']
 
         if waiting_for == 'num':
             # waiting for the user's fav number
             if len(numbers) > 0:
                 num = numbers.pop()
                 response, user_history = get_class_by_num(num, user_history)
-                # user_history['waiting'] = 'NONE'
-                # user_history['responded'] = True
             else:
                 possible_responses = ["🤨 How about a real number less than 1000? Is that hard?",
                                       "A number, buko...",
@@ -265,8 +309,6 @@ def generate_reponse(tweet_text, user):
             if len(places) > 0:
                 place = places.pop()
                 response, user_history = get_class_by_place(place, user_history)
-                # user_history['waiting'] = 'NONE'
-                # user_history['responded'] = True
             else:
                 possible_responses = ["A real SPECIFIC place. Like Paris is a specific place. You can do better than this!",
                                       "Well, I need a specific place. Surely you can manage that...",
@@ -279,7 +321,8 @@ def generate_reponse(tweet_text, user):
             # waiting for the user's fav thing/pastime
             if len(things) > 0:
                 thing = things.pop()
-                response, user_history = get_class_by_thing(thing, user_history)
+                noun = nouns[0]
+                response, user_history = get_class_by_thing(thing, noun, user_history)
             else:
                 possible_responses = ["I don't like that answer, try again lol",
                                       "Weird choice. Pick something else",
@@ -297,7 +340,7 @@ def generate_reponse(tweet_text, user):
     
     with open(filename, 'w') as o:
         json.dump(user_history, o)
-    print(user_history)
+    # print(user_history)
 
     return response
 
@@ -330,8 +373,5 @@ def respond_to_tweets(responses, recipients):
         print("Sent response to @{} for Tweet id {}".format(user, id_str))
         ind += 1
 
-
-
-
-print(generate_reponse("India", 'jane'))
+print(generate_reponse("1", 'sarah'))
 

@@ -86,7 +86,7 @@ class cmuClassScheduleParser(HTMLParser):
 
             elif self.ind == 8:
                 # we have a place
-                self.this_class['sections'][-1]['city'] = data
+                self.this_class['place'] = data
 
             elif self.ind == 9:
                 # we have a prof
