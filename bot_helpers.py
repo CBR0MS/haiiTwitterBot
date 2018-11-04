@@ -6,29 +6,29 @@ import warnings
 warnings.filterwarnings("ignore")
 import spacy
 import random
+import re
 
 #Twitter bot helpers 
 #A variety of functions used in tweet_bot.py 
 
 # Authenticate 
-print("Authenticating...")
+print("Authenticating...", end=" ")
 try:
     auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
     auth.set_access_token(access_token, access_token_secret)
     api = tweepy.API(auth)
-    print("Successfully authenticated!\n")
+    print("Successfully authenticated!\nLoading EN_CORE_LG NLP model...", end=" ")
 except tweepy.TweepError as e:
     print("Authentication failed, aborting")
     print(e)
 
-print("Loading EN NLP model...")
-nlp = spacy.load('en')
+nlp = spacy.load('en_core_web_lg')
 print("Loaded model!")
 
-print("Loading CMU course data...")
+print("Loading CMU course data...", end=" ")
 with open('spring2019classes.json') as f:
         data = json.load(f)
-print("Data loaded!\n")
+print("Data loaded!")
 
 ongoing_conversations = []
 
@@ -92,7 +92,7 @@ def get_class(user_history):
 
     for key in user_history['potentialClasses']:
         # if key not in user_history['badclasses']:
-        if data[key]['dept'] == user_history['topic'] and user_history['place'] in data[key]['place']:
+        if data[key]['dept'] == user_history['topic'] and 'place' in data[key] and user_history['place'] in data[key]['place']:
             hyphenated = hyphenate_class(key)
             response = random.choice(starting_phrases) + hyphenated + " " + data[key]['name'] + ". Check it out: https://www.cmucoursefind.xyz/courses/" + hyphenated
             user_history['waiting'] = 'NONE'
@@ -117,13 +117,13 @@ def get_next_question(user_history):
                             "Pick a random number less than 1000...",
                             "Pretend you're a computer and randomly generate me a number < 1000, please."]
 
-        place_questions = ["What's your favorite place in the whole wide 🌎?",
-                            "If you could go anywhere your little heart desired, where would it be?",
+        place_questions = ["What's your favorite place in the whole 🌎?",
+                            "Pick someplace in the world that you'd like to go...",
                             "If you could live anywhere in the world, where would you live?"]
 
-        thing_questions = ["What would be your favorite thing to do if you could do anything you wanted?",
-                            "Either telling the truth or not, what is one of your pastimes?",
-                            "What do you like to do when not doing things you are required to do?"]
+        thing_questions = ["Name something you like to do...",
+                            "What do you like to do for fun?",
+                            "What do you enjoy doing?"]
         random.shuffle(questions)
         for ques in questions:
             if ques not in user_history['asked']:
@@ -169,6 +169,7 @@ def get_class_by_num(num, user_history):
 
     return response, user_history 
 
+
 #########################################################################
 # Create a response given a place
 #########################################################################
@@ -203,7 +204,7 @@ def get_class_by_thing(thing, noun, user_history):
     topics = ''
     full_thing = ''
     noun = noun.lower()
-    print(noun)
+    #print(noun)
     found = False 
     # first try finding the exact thing in the departments 
     for topic in data['topics']:
@@ -243,9 +244,122 @@ def get_class_by_thing(thing, noun, user_history):
             response = "That sounds a bit like " + full_thing + ". " + res
     else:
         user_history['topic'] = full_thing
+        user_history['waitFast']['dept'] = full_thing
         res, user_history = get_next_question(user_history)
         response = "Okay, " + full_thing + " it is. " + res
     return response, user_history
+
+
+#########################################################################
+# Check if the question contains main keywords that have an easy answer
+#########################################################################
+def check_for_main_topics(text, places, times, dates, things, nouns, numbers, user_history):
+
+    day = user_history['waitFast']['day']
+    time = user_history['waitFast']['time']
+    dept = user_history['waitFast']['dept']
+
+    day_complete = ''
+    for thing in things:
+        if thing.lower() in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+            day_complete = thing
+            thing = thing.lower()
+            if thing == 'monday':
+                day = 'M'
+            elif thing == 'tuesday':
+                day = 'T'
+            elif thing == 'wednesday':
+                day = 'W'
+            elif thing == 'thursday':
+                day = 'R'
+            elif thing == 'friday':
+                day = 'F'
+            elif thing == 'saturday':
+                day = 'S'
+            elif thing == 'sunday':
+                day = 'U'
+
+    if len(times) > 0:
+        time = times[0]
+    
+    most_match = 400
+    percent_overlap = 0
+
+    #print(things)
+    for thing in things:
+        if thing.title() in data['topics']:
+            dept = thing.title()
+
+    if dept == '':
+        for thing in things:
+            splits = thing.split(" ")
+            for word in splits:
+                for topic in data['topics']:
+                    if word.lower() in topic.lower():
+                        #print("word: {}, topic: {}".format(word, topic))
+                        split_topic = (topic.lower()).split(word.lower())
+                        remainder = len(split_topic[0]) + len(split_topic[1])
+                        if remainder < most_match:
+                            most_match = remainder
+                            dept = topic
+    if dept != '':
+        percent_overlap = most_match / len(dept)
+    if percent_overlap < 0.2:
+        dept = ''
+
+    if dept == '' and day == '' and time == '': # have nothing, return 
+        return False, user_history
+    elif dept == '' and day == '' and time != '': # have time
+        user_history['waitFast']["time"] = time
+        return "Something at " + time + ", got it. What day and what department?", user_history
+    elif dept == '' and day != '' and time == '': # have day
+        user_history['waitFast']['day'] = day
+        if day_complete == '':
+            return "Ok, what department and time?", user_history
+        return "Something on " + day_complete + ", got it. What department and time?", user_history
+    elif dept != '' and day == '' and time == '': # have dept 
+        user_history['waitFast']['dept'] = dept
+        return "Something in " + dept + ", got it. What day and time?", user_history
+    elif dept == '' and day != '' and time != '': # have time and day
+        user_history['waitFast']['time'] = time
+        user_history['waitFast']['day'] = day
+        if day_complete == '':
+            return "Something at " + time + ". What department?", user_history
+        return "Something on " + day_complete + " at " + time + ". What department?", user_history
+    elif dept != '' and day != '' and time == '':  # have dept and day 
+        user_history['waitFast']['dept'] = dept
+        user_history['waitFast']['day'] = day
+        if day_complete == '':
+            return "Something in " + dept + ". What time?", user_history
+        return "Something in " + dept + " on " + day_complete + ". What time?", user_history
+    elif dept != '' and day == '' and time != '': # have dept and time
+        user_history['waitFast']['dept'] = dept
+        user_history['waitFast']['time'] = time
+        return "Something in " + dept + " at " + time + ". What day?", user_history
+    else: # have all three
+        #return "Something in " + dept + " at " + time + " on " + day + ", got it!", user_history
+        user_history['waitFast']['dept'] = dept
+        user_history['waitFast']['time'] = time
+        user_history['waitFast']['day'] = day
+        
+        for key in data:
+        # if key not in user_history['badclasses']:
+            if key.isnumeric() and data[key]['dept'] == dept:
+
+                for section in data[key]['sections']:
+                    if time in section['start'] and day in section['start']:
+                        user_history['potentialClasses'].append(key)
+                        
+        if len(user_history['potentialClasses']) > 0:
+            key = random.choice(user_history['potentialClasses'])
+            hyphenated = hyphenate_class(key)
+            return  "Ok, found a class that works! " + hyphenated + " " + data[key]['name'] + ". Check it out: https://www.cmucoursefind.xyz/courses/" + hyphenated, user_history
+        else:
+            possible_endings = ["How about a different time?", "Maybe try a different time?", "How about a different day?", "Perhaps a different day?"]
+            res = "Looks like that particular combination doesn't work... " + random.choice(possible_endings)
+            return res, user_history
+
+    return False, user_history
 
 #########################################################################
 # Create a response given a tweet's text and user. Check for previous
@@ -253,7 +367,7 @@ def get_class_by_thing(thing, noun, user_history):
 #########################################################################
 def generate_reponse(tweet_text, user):
     user_history = {}
-    filename = user + '.json'
+    filename = 'users/' + user + '.json'
     response = ''
 
     try:
@@ -266,6 +380,10 @@ def generate_reponse(tweet_text, user):
         user_history['interactions'] = 0
         user_history['asked'] = []
         user_history['potentialClasses'] = []
+        user_history['waitFast'] = {}
+        user_history['waitFast']['time'] = ''
+        user_history['waitFast']['day'] = ''
+        user_history['waitFast']['dept'] = ''
 
     doc = nlp(tweet_text)
 
@@ -274,6 +392,7 @@ def generate_reponse(tweet_text, user):
     things = []
     nouns = []
     numbers = []
+    dates = []
 
     for ent in doc.ents:
         if ent.label_ == 'GPE' or ent.label_ == 'LOC':
@@ -282,10 +401,15 @@ def generate_reponse(tweet_text, user):
             times.append(ent.text)
         elif ent.label_ == 'CARDINAL':
             numbers.append(ent.text)
+        elif ent.label == 'DATE':
+            dates.append(ent.text)
 
     for chunk in doc.noun_chunks:
         things.append(chunk.text)
         nouns.append(chunk.root.text)
+
+    other_times = re.findall(r'\d{1,2}(?:(?:am|pm)|(?::\d{1,2})(?:am|pm)?)', tweet_text)
+    times.extend(other_times)
 
     if 'waiting' in user_history:
         # we were waiting for a response from the user
@@ -310,7 +434,7 @@ def generate_reponse(tweet_text, user):
                 place = places.pop()
                 response, user_history = get_class_by_place(place, user_history)
             else:
-                possible_responses = ["A real SPECIFIC place. Like Paris is a specific place. You can do better than this!",
+                possible_responses = ["A real SPECIFIC place. Like Pittsburgh is a specific place. You can do better than this!",
                                       "Well, I need a specific place. Surely you can manage that...",
                                       "A place on 🌎 like a city or country would be most helpful...",
                                       "How about your favorite city?"]
@@ -319,9 +443,15 @@ def generate_reponse(tweet_text, user):
 
         elif waiting_for == 'thing':
             # waiting for the user's fav thing/pastime
+            max_len = 0
+            index = 0
             if len(things) > 0:
-                thing = things.pop()
-                noun = nouns[0]
+                for i in range(0, len(things)):
+                    if len(things[i]) > max_len:
+                        max_len = len(things[i])
+                        index = i
+                thing = things[i]
+                noun = nouns[i]
                 response, user_history = get_class_by_thing(thing, noun, user_history)
             else:
                 possible_responses = ["I don't like that answer, try again lol",
@@ -333,10 +463,19 @@ def generate_reponse(tweet_text, user):
 
         elif waiting_for == 'NONE':
             # the user has already been given a class
-            response = "You've been given a class. Go take it!"
+            keyword_response, user_history = check_for_main_topics(tweet_text, places, times, dates, things, nouns, numbers, user_history)
+            if not keyword_response:
+                response = "You've been given a class. Go take it! If you want to take something else, provide a day, time, or different department."
+            else:
+                response = keyword_response
 
     else:
-        response, user_history = get_next_question(user_history)
+        # see if the user is requesting specific information 
+        keyword_response, user_history = check_for_main_topics(tweet_text, places, times, dates, things, nouns, numbers, user_history)
+        if not keyword_response:
+            response, user_history = get_next_question(user_history)
+        else:
+            response = keyword_response
     
     with open(filename, 'w') as o:
         json.dump(user_history, o)
@@ -373,5 +512,5 @@ def respond_to_tweets(responses, recipients):
         print("Sent response to @{} for Tweet id {}".format(user, id_str))
         ind += 1
 
-print(generate_reponse("1", 'sarah'))
+#print(generate_reponse("find a class in Design next semester", 'jane'))
 
